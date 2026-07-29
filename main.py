@@ -12,8 +12,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 BOT_PASSWORD = os.environ.get("BOT_PASSWORD")
 
 WATERMARK = os.environ.get("WATERMARK", "@bvsrv1")
-MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "1"))
-MAX_SIZE_MB = 180 # Yahi limit hai
+try: MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "1"))
+except: MAX_CONCURRENT = 1
+MAX_SIZE_MB = 180
 
 client = TelegramClient('bot_session', API_ID, API_HASH)
 
@@ -66,6 +67,19 @@ async def progress_callback(current, total, msg, action, event_id, user_id):
         try: await msg.edit(f"{action} {percent}%")
         except: pass
 
+async def get_resolution(file_path):
+    probe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', file_path]
+    probe = await asyncio.create_subprocess_exec(*probe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    stdout, _ = await probe.communicate()
+    try:
+        res = stdout.decode().strip()
+        if 'x' not in res or res == '': raise ValueError
+        w, h = map(int, res.split('x'))
+        if w < 50 or h < 50: raise ValueError
+        return w, h
+    except:
+        return 1280, 720 # Default 720p agar metadata kharab ho
+
 async def process_video(event, user_id):
     global ZIP_QUEUE
     msg = None
@@ -86,7 +100,13 @@ async def process_video(event, user_id):
         else:
             output = f"water_{event.id}.mp4"
 
-        safe_watermark = CURRENT_WATERMARK.replace("'", "\\'").replace(":", "\\:").replace("%", "%%")
+        # FIX 1: WM Text 100% safe
+        safe_watermark = CURRENT_WATERMARK.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "%%").replace(",", "\\,")
+
+        # FIX 2: Color check
+        if '@' not in CURRENT_COLOR:
+            CURRENT_COLOR = CURRENT_COLOR + "@1"
+
         original_size_mb = os.path.getsize(file) / (1024*1024)
         needs_compress = original_size_mb > 80
 
@@ -94,10 +114,8 @@ async def process_video(event, user_id):
             await msg.edit("📦 **No Watermark Mode**")
             shutil.copy(file, output)
         else:
-            probe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', file]
-            probe = await asyncio.create_subprocess_exec(*probe_cmd, stdout=asyncio.subprocess.PIPE)
-            stdout, _ = await probe.communicate()
-            w, h = map(int, stdout.decode().strip().split('x'))
+            # FIX 3: Safe resolution read
+            w, h = await get_resolution(file)
 
             file_for_wm = file
             temp_file = None
@@ -110,16 +128,13 @@ async def process_video(event, user_id):
                 _, _ = await proc1.communicate()
                 if proc1.returncode!= 0: raise Exception("FFmpeg Step 1 Error")
                 file_for_wm = temp_file
-                probe_cmd2 = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', temp_file]
-                probe2 = await asyncio.create_subprocess_exec(*probe_cmd2, stdout=asyncio.subprocess.PIPE)
-                stdout2, _ = await probe2.communicate()
-                w, h = map(int, stdout2.decode().strip().split('x'))
+                w, h = await get_resolution(temp_file) # compress ke baad dobara
 
             await msg.edit("🎬 **Step 2/2: Watermark laga rahe...**")
             dynamic_size = int(w * WM_PERCENT)
             final_size = max(20, min(150, dynamic_size))
             text_w = final_size * 0.5 * len(safe_watermark)
-            margin = int(w * 0.02)
+            margin = max(10, int(w * 0.02))
             max_x = max(margin, w - text_w - margin)
             max_y = max(margin, h - final_size - margin)
 
@@ -132,7 +147,8 @@ async def process_video(event, user_id):
                 x_formula = f"{margin}"
                 y_formula = f"{margin}"
 
-            vf_filter = f"drawtext=fontfile=./DejaVuSans.ttf:text='{safe_watermark}':fontsize={final_size}:fontcolor={CURRENT_COLOR}:x='{x_formula}':y='{y_formula}'"
+            # FIX 4: Auto-rotate + scale add kiya
+            vf_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{safe_watermark}':fontsize={final_size}:fontcolor={CURRENT_COLOR}:x='{x_formula}':y='{y_formula}'"
             crf_val = '26' if needs_compress else '24'
             cmd2 = ['ffmpeg', '-threads', '1', '-i', file_for_wm, '-vf', vf_filter, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', crf_val, '-c:a', 'copy', output, '-y']
             proc2 = await asyncio.create_subprocess_exec(*cmd2, stderr=asyncio.subprocess.PIPE)
@@ -160,7 +176,7 @@ async def process_video(event, user_id):
             if file and os.path.exists(file): os.remove(file)
         except: pass
 
-# ===== WIZARD + COMMANDS v2.25.13b =====
+# ===== WIZARD + COMMANDS v2.25.15b =====
 @client.on(events.NewMessage(pattern=r'^/start'))
 async def start_handler(event):
     buttons = [
@@ -173,7 +189,7 @@ async def start_handler(event):
         [Button.inline('📦 Zip Mode', b'zip'), Button.inline('⬇️ Create Zip', b'zipnow')],
         [Button.inline('❌ Cancel Queue', b'cancel_menu')]
     ]
-    await event.reply('**WMark Bot v2.25.13b**\nNeeche se setting select karo:', buttons=buttons)
+    await event.reply('**WMark Bot v2.25.15b**\nNeeche se setting select karo:', buttons=buttons)
 
 @client.on(events.CallbackQuery)
 async def callback_handler(event):
@@ -262,8 +278,12 @@ async def pending_handler(event):
         global CURRENT_WATERMARK, WM_PERCENT, NAME_MODE, CUSTOM_PREFIX, CURRENT_COLOR, DELETE_ORIGINAL, MAX_SIZE_MB
         if state == 'set': CURRENT_WATERMARK = text; await event.reply(f'✅ Watermark Updated\n{text}')
         elif state == 'color': CURRENT_COLOR = text; await event.reply(f'✅ Watermark Color: {text}')
-        elif state == 'wmpercent': WM_PERCENT = float(text); await event.reply(f'WM Size%: {text}')
-        elif state == 'limit': MAX_SIZE_MB = int(text); await event.reply(f'✅ Size Limit: {text}MB')
+        elif state == 'wmpercent':
+            try: WM_PERCENT = float(text); await event.reply(f'WM Size%: {WM_PERCENT}')
+            except: await event.reply('❌ Example: 0.05')
+        elif state == 'limit':
+            try: MAX_SIZE_MB = int(text); await event.reply(f'✅ Size Limit: {MAX_SIZE_MB}MB')
+            except: await event.reply('❌ Example: 500')
         elif state == 'setname': NAME_MODE = text; CUSTOM_PREFIX = "wm_" if text=="custom" else ""; await event.reply(f'Name: {text}')
         elif state == 'delete': DELETE_ORIGINAL = text.lower() == 'on'; await event.reply(f'Delete: {DELETE_ORIGINAL}')
 
@@ -306,12 +326,16 @@ async def color_no_arg(event):
 @client.on(events.NewMessage(pattern=r'^/wmpercent (.+)'))
 async def wmpercent_handler(event):
     if event.sender_id not in AUTHORIZED_USERS: return
-    global WM_PERCENT; WM_PERCENT = float(event.text.split(maxsplit=1)[1]); await event.reply(f'WM Size%: {WM_PERCENT}')
+    global WM_PERCENT
+    try: WM_PERCENT = float(event.text.split(maxsplit=1)[1]); await event.reply(f'WM Size%: {WM_PERCENT}')
+    except: await event.reply('❌ Example: /wmpercent 0.05')
 
 @client.on(events.NewMessage(pattern=r'^/limit (.+)'))
 async def limit_handler(event):
     if event.sender_id not in AUTHORIZED_USERS: return
-    global MAX_SIZE_MB; MAX_SIZE_MB = int(event.text.split(maxsplit=1)[1]); await event.reply(f'✅ Size Limit: {MAX_SIZE_MB}MB')
+    global MAX_SIZE_MB
+    try: MAX_SIZE_MB = int(event.text.split(maxsplit=1)[1]); await event.reply(f'✅ Size Limit: {MAX_SIZE_MB}MB')
+    except: await event.reply('❌ Example: /limit 500')
 
 @client.on(events.NewMessage(pattern=r'^/limit$'))
 async def limit_no_arg(event):
@@ -411,7 +435,7 @@ async def handle_video(event):
 async def main():
     for _ in range(MAX_CONCURRENT): asyncio.create_task(worker())
     await client.start(bot_token=BOT_TOKEN)
-    print("✅ Bot Online v2.25.13b")
+    print("✅ Bot Online v2.25.15b")
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
