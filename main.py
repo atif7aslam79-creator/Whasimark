@@ -3,9 +3,9 @@ import re
 import time
 import asyncio
 import uuid
-import tempfile # FIX 1
+import tempfile
 import shutil
-import shlex # FIX 2: special text ke liye
+import shlex
 from telethon import TelegramClient, events, Button
 import zipfile
 
@@ -72,9 +72,8 @@ async def progress_callback(current, total, msg, action, event_id, user_id):
 async def process_video(event, user_id):
     global ZIP_QUEUE
     msg = None
-    temp_dir = None # FIX 3
+    temp_dir = None
     try:
-        # FIX 3: Har video ke liye alag folder
         temp_dir = tempfile.mkdtemp()
         unique_id = uuid.uuid4().hex
 
@@ -92,9 +91,9 @@ async def process_video(event, user_id):
             output = f"{CUSTOM_PREFIX}{event.file.name}" if event.file and event.file.name else f"{CUSTOM_PREFIX}video_{unique_id}.mp4"
         else:
             output = f"water_{unique_id}.mp4"
-        output = f"{temp_dir}/{output}" # output bhi temp me
+        output = f"{temp_dir}/{output}"
 
-        safe_watermark = shlex.quote(CURRENT_WATERMARK) # FIX 2
+        safe_watermark = shlex.quote(CURRENT_WATERMARK)
 
         original_size_mb = os.path.getsize(file) / (1024*1024)
         needs_compress = original_size_mb > 80
@@ -115,11 +114,10 @@ async def process_video(event, user_id):
             if needs_compress:
                 await msg.edit(f"🗜️ **Step 1/2: Compressing to 720p...** `{original_size_mb:.1f}MB`")
                 temp_file = f"{temp_dir}/temp_{unique_id}.mp4"
-                # FIX 4: scale fix - width hamesha jora
                 cmd1 = ['ffmpeg', '-xerror', '-threads', '1', '-i', file, '-vf', f"scale=trunc(iw/2)*2:720", '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-maxrate', '2M', '-bufsize', '4M', '-c:a', 'aac', '-b:a', '96k', temp_file, '-y']
                 proc1 = await asyncio.create_subprocess_exec(*cmd1, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 _, stderr1 = await proc1.communicate()
-                if proc1.returncode != 0: raise Exception(f"FFmpeg Step 1 Error:\n{stderr1.decode()}") # FIX 5: Pura error
+                if proc1.returncode != 0: raise Exception(f"FFmpeg Step 1 Error:\n{stderr1.decode()}")
                 file_for_wm = temp_file
                 probe_cmd2 = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', temp_file]
                 probe2 = await asyncio.create_subprocess_exec(*probe_cmd2, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -143,13 +141,13 @@ async def process_video(event, user_id):
                 x_formula = f"{margin}"
                 y_formula = f"{margin}"
 
-            # FIX 2: shlex.quote ki wajah se quotes nahi
-            vf_filter = f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text={safe_watermark}:fontsize={final_size}:fontcolor={CURRENT_COLOR}:x={x_formula}:y={y_formula}"
+            # FIX: Local font file use ho rahi hai
+            vf_filter = f"drawtext=fontfile=DejaVuSans.ttf:text={safe_watermark}:fontsize={final_size}:fontcolor={CURRENT_COLOR}:x={x_formula}:y={y_formula}"
             crf_val = '26' if needs_compress else '24'
             cmd2 = ['ffmpeg', '-xerror', '-threads', '1', '-i', file_for_wm, '-vf', vf_filter, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', crf_val, '-c:a', 'copy', output, '-y']
             proc2 = await asyncio.create_subprocess_exec(*cmd2, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             _, stderr2 = await proc2.communicate()
-            if proc2.returncode != 0: raise Exception(f"FFmpeg Step 2 Error:\n{stderr2.decode()}") # FIX 5: Pura error
+            if proc2.returncode != 0: raise Exception(f"FFmpeg Step 2 Error:\n{stderr2.decode()}")
 
         if ZIP_MODE:
             shutil.move(output, os.path.basename(output))
@@ -170,12 +168,9 @@ async def process_video(event, user_id):
     finally:
         try:
             if temp_dir and os.path.exists(temp_dir): 
-                shutil.rmtree(temp_dir) # FIX 3: pura folder saaf
+                shutil.rmtree(temp_dir)
         except: pass
 
-# ===== BAQI SARA CODE SAME HAI =====
-# Neeche wala sab copy kar lo apne purane code se
-# Sirf start me version change kar dena
 @client.on(events.NewMessage(pattern=r'^/start'))
 async def start_handler(event):
     buttons = [
@@ -188,14 +183,15 @@ async def start_handler(event):
         [Button.inline('📦 Zip Mode', b'zip'), Button.inline('⬇️ Create Zip', b'zipnow')],
         [Button.inline('❌ Cancel Queue', b'cancel_menu')]
     ]
-    await event.reply('**WMark Bot v2.25.18**\nNeeche se setting select karo:', buttons=buttons)
+    await event.reply('**WMark Bot v2.25.19**\nNeeche se setting select karo:', buttons=buttons)
 
-# ... baqi sab handlers same ...
-# main() me bhi version change kar dena
+# BAQI SAB HANDLERS SAME RAHENGE
+# login, logout, callback, etc... apne purane code se copy kar lena
+
 async def main():
     for _ in range(MAX_CONCURRENT): asyncio.create_task(worker())
     await client.start(bot_token=BOT_TOKEN)
-    print("✅ Bot Online v2.25.18")
+    print("✅ Bot Online v2.25.19")
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
