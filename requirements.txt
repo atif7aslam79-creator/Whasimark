@@ -1,1 +1,4 @@
-telethon
+telethonpyrogram
+tgcrypto
+ffmpeg-python
+pillow
